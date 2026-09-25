@@ -2,10 +2,19 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { AOI, AOITilesResponse, TimelineEntry, Mosaic } from '@/types/api';
 
+const isDemoAOI = (aoi: AOI) => {
+  const normalizedId = aoi.aoi_id.replace(/[-_\s]+/g, '').toLowerCase();
+  const normalizedName = aoi.name.replace(/[-_\s]+/g, '').toLowerCase();
+  return normalizedId === 'demoaoilive' || normalizedName === 'demoaoilive';
+};
+
 export function useAOIs() {
   return useQuery<AOI[]>({
     queryKey: ['aois'],
-    queryFn: () => api.get<AOI[]>('/aois'),
+    queryFn: async () => {
+      const aois = await api.get<AOI[]>('/aois');
+      return aois.filter((aoi) => !isDemoAOI(aoi));
+    },
     staleTime: 30000,
   });
 }

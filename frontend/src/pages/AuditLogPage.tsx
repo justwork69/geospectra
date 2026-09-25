@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useAuditLog } from '@/hooks/useAuditLog';
 import { GlassPanel } from '@/components/common/GlassPanel';
 import { ErrorCard } from '@/components/common/ErrorCard';
@@ -8,6 +8,10 @@ import { motion } from 'framer-motion';
 
 export const AuditLogPage: React.FC = () => {
   const { data: logs, isLoading, isError, refetch } = useAuditLog();
+
+  useEffect(() => {
+    refetch();
+  }, [refetch]);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
@@ -70,7 +74,7 @@ export const AuditLogPage: React.FC = () => {
             Analyst Review Audit Trail
           </h1>
           <p className="text-xs text-text-secondary mt-1 font-mono">
-            Cryptographically sealed provenance log of all human verification actions
+            Verifiable provenance log — every decision carries a SHA-256 record fingerprint.
           </p>
         </div>
 
@@ -133,19 +137,20 @@ export const AuditLogPage: React.FC = () => {
                 <th className="py-3 px-4">Decision</th>
                 <th className="py-3 px-4">Analyst Verification Rationale</th>
                 <th className="py-3 px-4">Timestamp (UTC)</th>
+                <th className="py-3 px-4">Record Fingerprint (SHA-256)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/[0.04]">
               {isLoading ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-text-muted">
-                    Loading cryptographic audit trail…
+                  <td colSpan={7} className="py-12 text-center text-text-muted">
+                    Loading audit log…
                   </td>
                 </tr>
               ) : paginatedLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-text-muted">
-                    {searchQuery ? 'No audit records match search query.' : 'Zero analyst decisions logged yet.'}
+                  <td colSpan={7} className="py-12 text-center text-text-muted">
+                    {searchQuery ? 'No audit records match search query.' : 'No audit decisions yet. Confirm or reject a candidate from Review Queue to create the first audit record.'}
                   </td>
                 </tr>
               ) : (
@@ -184,6 +189,9 @@ export const AuditLogPage: React.FC = () => {
                       {entry.reason || '—'}
                     </td>
                     <td className="py-3 px-4 text-text-muted">{formatDateTime(entry.created_at)}</td>
+                    <td className="py-3 px-4 text-text-muted" title={entry.fingerprint || undefined}>
+                      {entry.fingerprint ? `${entry.fingerprint.slice(0, 16)}…` : '—'}
+                    </td>
                   </motion.tr>
                 ))
               )}

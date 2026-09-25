@@ -54,6 +54,12 @@ export const SearchPage: React.FC = () => {
   // AOIs for dropdown filter
   const { data: aois } = useAOIs();
 
+  useEffect(() => {
+    if (aois && selectedAoi && !aois.some((aoi) => aoi.aoi_id === selectedAoi)) {
+      setSelectedAoi('');
+    }
+  }, [aois, selectedAoi]);
+
   // Search Mutations
   const textSearch = useTextSearch();
   const imageSearch = useImageSearch();

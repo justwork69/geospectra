@@ -248,6 +248,7 @@ export interface AuditLogEntry {
   decision: string;
   reason: string | null;
   created_at: string;
+  fingerprint?: string | null;
 }
 
 export interface Cluster {
@@ -280,10 +281,14 @@ export interface OnboardJob {
   status: 'queued' | 'running' | 'done' | 'failed';
   progress: number;
   message: string | null;
+  stage?: 'preparing' | 'discovering' | 'resolving' | 'validating' | 'ingesting' | 'finalizing' | 'done' | null;
+  stage_detail?: string | null;
+  started_at?: string | null;
   aoi_id: string | null;
   scenes_found: number | null;
   scenes_ingested: number | null;
   scenes_failed: number | null;
+  scenes_skipped?: number | null;
   tiles_added: number | null;
   warnings: string[];
   scenes: OnboardScene[];

@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Activity, ArrowLeft, Layers, ScanSearch, X } from 'lucide-react';
+import { Activity, ArrowLeft, Download, Layers, ScanSearch, X } from 'lucide-react';
 import { Area, AreaChart, CartesianGrid, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { useTileObservations, useTemporalAnalysis, useAnalysisBrief } from '@/hooks/useTiles';
+import { downloadAnalystReport, useTileObservations, useTemporalAnalysis, useAnalysisBrief } from '@/hooks/useTiles';
 import { GlassPanel } from '@/components/common/GlassPanel';
+import { AnalystChatPanel } from '@/components/common/AnalystChatPanel';
 import { BeforeAfterCompare } from '@/components/common/BeforeAfterCompare';
 import { TileThumbnail } from '@/components/common/TileThumbnail';
 import { ErrorCard } from '@/components/common/ErrorCard';
@@ -58,6 +59,8 @@ export const AnalysisStudioPage: React.FC = () => {
   const [activeDate, setActiveDate] = useState<string | undefined>();
   const [submitted, setSubmitted] = useState(false);
   const [isComparisonFullscreen, setIsComparisonFullscreen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const { data: observations, isLoading, isError } = useTileObservations(tileId);
   const imageObservations = observations?.filter((item) => Boolean(getObservationImageUrl(item))) || [];
@@ -97,6 +100,37 @@ export const AnalysisStudioPage: React.FC = () => {
   const velocityChart = noteSeries
     .filter((point) => Boolean(point.date_pair.after) && point.date_pair.after >= fromDate && point.date_pair.after <= toDate)
     .map((point) => ({ date: point.date_pair.after, value: point.velocity ?? null }));
+
+  const sarSeriesCards = analysis?.sar
+    ? (['vv_mean', 'vh_mean', 'vv_minus_vh'] as const)
+        .map((key) => {
+          const points = (analysis.sar?.[key] || [])
+            .map((value, index) => ({
+              date: analysis.sar?.dates[index] || '',
+              value: typeof value === 'number' && Number.isFinite(value) ? value : null,
+            }))
+            .filter((point) => point.date >= fromDate && point.date <= toDate && point.value !== null);
+
+          const title = key === 'vv_mean' ? 'Sentinel-1 VV MEAN (dB)' : key === 'vh_mean' ? 'Sentinel-1 VH MEAN (dB)' : 'Sentinel-1 VV - VH (dB)';
+          const color = key === 'vv_mean' ? '#FBBF24' : key === 'vh_mean' ? '#FB7185' : '#A78BFA';
+
+          return { key, title, points, color };
+        })
+        .filter(({ points }) => points.length > 0)
+    : [];
+
+  const handleReportExport = async (format: 'pdf' | 'json') => {
+    if (!tileId || !analysis) return;
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      await downloadAnalystReport(tileId, fromDate, toDate, format, brief?.brief);
+    } catch {
+      setExportError('Report export failed - please retry.');
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -185,11 +219,9 @@ export const AnalysisStudioPage: React.FC = () => {
                     <SignalChart key={key} title={key.toUpperCase() + ' Temporal Signal'} data={points} color={key === 'ndvi' ? '#34D399' : '#60A5FA'} fromDate={fromDate} toDate={toDate} activeDate={activeDate} onHover={setActiveDate} unit={key.toUpperCase()} />
                   );
                 })}
-                {analysis.sar && (['vv_mean', 'vh_mean', 'vv_minus_vh'] as const).map((key) => {
-                  const points = (analysis.sar?.[key] || []).map((value, index) => ({ date: analysis.sar?.dates[index] || '', value: typeof value === 'number' && Number.isFinite(value) ? value : null })).filter((point) => point.date >= fromDate && point.date <= toDate && point.value !== null);
-                  const title = key === 'vv_mean' ? 'Sentinel-1 VV MEAN (dB)' : key === 'vh_mean' ? 'Sentinel-1 VH MEAN (dB)' : 'Sentinel-1 VV - VH (dB)';
-                  return <SignalChart key={key} title={title} data={points} color={key === 'vv_mean' ? '#FBBF24' : key === 'vh_mean' ? '#FB7185' : '#A78BFA'} fromDate={fromDate} toDate={toDate} activeDate={activeDate} onHover={setActiveDate} unit="dB" />;
-                })}
+                {sarSeriesCards.map(({ key, title, points, color }) => (
+                  <SignalChart key={key} title={title} data={points} color={color} fromDate={fromDate} toDate={toDate} activeDate={activeDate} onHover={setActiveDate} unit="dB" />
+                ))}
               </div>
 
               {(() => {
@@ -210,6 +242,20 @@ export const AnalysisStudioPage: React.FC = () => {
               })()}
 
               <GlassPanel className="p-5"><div className="text-xs font-mono uppercase tracking-wider text-text-secondary">Analyst remark</div><div className="mt-2 text-[10px] font-mono uppercase text-aurora-300">{brief?.available ? 'QWEN / OLLAMA ONLINE' : 'QWEN / OLLAMA UNAVAILABLE - DETERMINISTIC SUMMARY'}</div><p className="mt-3 max-w-3xl text-sm leading-6 text-text-secondary">{brief?.brief || 'Grounded remark will be available after analysis.'}</p></GlassPanel>
+              <AnalystChatPanel tileId={tileId} fromDate={fromDate} toDate={toDate} enabled={Boolean(submitted && validPair && analysis)} seedBrief={brief?.brief} />
+              {submitted && validPair && analysis && <GlassPanel className="p-5">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <div className="text-xs font-mono uppercase tracking-wider text-text-secondary">Analyst Evidence Report</div>
+                    <p className="mt-2 text-xs font-mono text-text-muted">One-page grounded dossier - imagery, metrics, SAR status, analyst summary. Saved locally; nothing is uploaded.</p>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <button type="button" disabled={isExporting} onClick={() => void handleReportExport('pdf')} className="inline-flex items-center gap-2 rounded-lg bg-aurora-400 px-3 py-2 text-xs font-mono font-semibold text-space-950 disabled:cursor-not-allowed disabled:opacity-40"><Download size={14} /> Export PDF</button>
+                    <button type="button" disabled={isExporting} onClick={() => void handleReportExport('json')} className="inline-flex items-center gap-2 rounded-lg border border-white/[0.1] bg-white/[0.04] px-3 py-2 text-xs font-mono text-text-secondary transition hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"><Download size={14} /> Export JSON</button>
+                  </div>
+                </div>
+                {exportError && <div className="mt-3 text-[11px] font-mono text-amber-300">{exportError}</div>}
+              </GlassPanel>}
             </>
           )}
 
@@ -219,7 +265,7 @@ export const AnalysisStudioPage: React.FC = () => {
             <div className="text-xs font-mono uppercase tracking-wider text-text-secondary">Full temporal context</div>
             <div className="mt-4 flex gap-3 overflow-x-auto pb-2">{imageObservations.map((item) => (
               <button type="button" key={item.observation_id} onClick={() => { setActiveDate(item.acquisition_date); setFromDate(item.acquisition_date); setSubmitted(false); }} className="w-28 min-w-28 text-left">
-                <TileThumbnail src={getObservationImageUrl(item) ?? undefined} alt={item.acquisition_date} aspectRatio="square" className={item.acquisition_date === fromDate || item.acquisition_date === toDate || item.acquisition_date === activeDate ? 'ring-2 ring-aurora-400' : ''} />
+                <TileThumbnail src={getObservationImageUrl(item) ?? undefined} alt={item.acquisition_date} aspectRatio="square" loading="eager" className={item.acquisition_date === fromDate || item.acquisition_date === toDate || item.acquisition_date === activeDate ? 'ring-2 ring-aurora-400' : ''} />
                 <div className="mt-1 text-[10px] font-mono text-text-muted">{formatDate(item.acquisition_date)}</div>
               </button>
             ))}</div>

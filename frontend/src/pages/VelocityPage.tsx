@@ -53,6 +53,15 @@ export const VelocityPage: React.FC = () => {
   const { data: selectedObservations = [] } = useTileObservations(selectedTileId || undefined);
 
   useEffect(() => {
+    if (aois.length > 0 && selectedAOIId && !aois.some((aoi) => aoi.aoi_id === selectedAOIId)) {
+      setSelectedAOIId('');
+      setSelectedTileId('');
+      setFromDate('');
+      setToDate('');
+    }
+  }, [aois, selectedAOIId]);
+
+  useEffect(() => {
     if (selectedAOIId && aoiTiles && selectedTileId && !aoiTiles.tiles.some((item) => item.tile_id === selectedTileId)) {
       setSelectedTileId('');
     }

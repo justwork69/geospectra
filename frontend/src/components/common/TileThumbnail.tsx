@@ -13,6 +13,7 @@ interface TileThumbnailProps {
   onOpenZoom?: (src: string | null | undefined) => void;
   showZoomButton?: boolean;
   objectFit?: 'cover' | 'contain';
+  loading?: 'lazy' | 'eager';
 }
 
 export const TileThumbnail: React.FC<TileThumbnailProps> = ({
@@ -26,6 +27,7 @@ export const TileThumbnail: React.FC<TileThumbnailProps> = ({
   onOpenZoom,
   showZoomButton = false,
   objectFit = 'cover',
+  loading = 'lazy',
 }) => {
   const [hasError, setHasError] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -74,7 +76,7 @@ export const TileThumbnail: React.FC<TileThumbnailProps> = ({
           <img
             src={src}
             alt={alt}
-            loading="lazy"
+            loading={loading}
             decoding="async"
             onLoad={() => setIsLoaded(true)}
             onError={() => setHasError(true)}

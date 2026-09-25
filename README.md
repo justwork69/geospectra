@@ -42,7 +42,7 @@ heatmaps use per-band percentile normalization and degrade to unavailable
 when band metadata is ambiguous.
 
 Per-AOI deterministic narratives remain the guaranteed explanation. An
-optional local Llama 3.2 1B model through Ollama can produce a separate brief;
+optional local Qwen 2.5 0.5B model through Ollama can produce a separate brief;
 it is disabled by default, makes no remote calls, and falls back safely.
 
 SAR ingestion is raster-first and writes to the canonical `sar_tiles` table:
@@ -143,10 +143,12 @@ The optional analyst brief feature does not read a model file from this project'
 
 ```bash
 ollama serve
-ollama pull llama3.2:1b
+ollama pull qwen2.5:0.5b
 ```
 
-This application then calls the local Ollama endpoint at `OLLAMA_HOST` (default `http://localhost:11434`) and uses `OLLAMA_MODEL` (default `llama3.2:1b`). The model is managed by Ollama in its own cache, not in `models/`; a file such as `models/llama3.2:1b` or `models/TinyLlama...gguf` is not expected for the default architecture.
+This application then calls the local Ollama endpoint at `OLLAMA_HOST` (default `http://localhost:11434`) and uses `OLLAMA_MODEL` (default `qwen2.5:0.5b`). Analysis Studio also includes the offline Qwen Analyst Assistant, which uses the same grounded analysis facts. If Ollama is unavailable, the UI receives a deterministic grounded fallback. The model is managed by Ollama in its own cache, not in `models/`; a file such as `models/qwen2.5:0.5b` or `models/TinyLlama...gguf` is not expected for the default architecture.
+
+Analysis Studio can export a one-page Analyst Evidence Report as PDF for human review or JSON for machine-readable evidence. The report uses the same analysis facts as the Analyst Remark and includes before/after imagery, change metrics, SAR status, grounded analyst summary, and evidence limitations.
 
 If you prefer a direct GGUF file instead of Ollama, set `LLM_BACKEND=llama_cpp` and point `LLM_GGUF_PATH` to a local quantized model under `models/` (for example `models/TinyLlama-1.1B-Chat-v1.0.Q4_K_M.gguf`). The project does not bundle model weights; you download the file yourself. This is a separate alternate backend for the optional brief flow and is not required for the core RemoteCLIP pipeline.
 
@@ -213,6 +215,28 @@ Useful helpers:
 python -m app.cli inspect-zip path/to/one_month.zip
 python -m app.cli list-aois
 ```
+
+### Live incremental onboarding demo
+
+The live onboarding page exposes the existing pipeline as it runs. Use the
+small real-scene folder at `demo/demo-aoi-live/` when it is available, or any
+folder containing valid local Sentinel-2 `.tif` scenes. Start the backend and
+frontend, open **Onboard AOI**, enter a unique AOI name and the server-side
+folder path, then select **Start Onboarding Pipeline**.
+
+The timeline reports the real stages: Preparing, Discovering, Resolving,
+Validating, Ingesting, and Finalizing. During ingestion, the detail line shows
+the current scene and the actual substage order from the pipeline:
+validating, registering, tiling, features, embedding, and indexing. Scene
+rows appear as their callbacks complete, including failed and
+`skipped_duplicate` outcomes. When the job is done, use **View Cataloged AOI**
+to open the newly available catalog, then continue to Semantic Search and
+Analysis Studio.
+
+To demonstrate deduplication, submit the same folder again using the existing
+AOI name and wait for the job to finish. The report should show
+`Scenes Skipped` for scenes already registered; no new scene identity or
+database schema is created by the demo.
 
 ## Local backend + frontend
 

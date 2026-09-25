@@ -323,7 +323,7 @@ def count_input_files(source_folder: Path) -> int:
         if match and date:
             bands_by_date.setdefault(date, set()).add(match.group(1))
     scene_dates.update(date for date, bands in bands_by_date.items() if len(bands) == 4)
-    return len(scene_dates)
+    return len(scene_dates) or sum(1 for path in source_folder.rglob("*") if path.suffix.lower() in {".tif", ".tiff"})
 
 
 def _resolve_scene(path: Path, staging_dir: Path, sensor: str) -> tuple[str, SceneMetadata]:
@@ -390,8 +390,14 @@ def _resolve_scene(path: Path, staging_dir: Path, sensor: str) -> tuple[str, Sce
 
 def onboard_aoi(aoi_name: str, source_folder: str, sensor: str = "SENTINEL2_L2A",
                  staging_subdir: str = None,
-                 on_scene_done: Callable[[SceneOutcome, int, int], None] | None = None) -> OnboardReport:
+                 on_scene_done: Callable[[SceneOutcome, int, int], None] | None = None,
+                 on_stage: Callable[[str, str, int], None] | None = None) -> OnboardReport:
+    def stage(name: str, detail: str, progress: int):
+        if on_stage is not None:
+            on_stage(name, detail, progress)
+
     source_folder = Path(source_folder)
+    stage("preparing", "Validating RemoteCLIP runtime", 0)
     if not source_folder.exists():
         raise FileNotFoundError(f"Source folder does not exist: {source_folder}")
     # Validate the embedding dependency before creating an AOI, extracting
@@ -405,6 +411,7 @@ def onboard_aoi(aoi_name: str, source_folder: str, sensor: str = "SENTINEL2_L2A"
     aoi_id = db.get_or_create_aoi(aoi_name, source_folder=str(source_folder))
     log.info("AOI '%s' -> aoi_id=%d", aoi_name, aoi_id)
 
+    stage("discovering", "Scanning source folder", 5)
     input_files = _discover_input_files(source_folder, staging_dir)
     if not input_files:
         raise ValueError(f"No .zip/.tif/.tiff files found in {source_folder}")
@@ -413,13 +420,27 @@ def onboard_aoi(aoi_name: str, source_folder: str, sensor: str = "SENTINEL2_L2A"
     # Pass 1: resolve every file to (tif_path, metadata) WITHOUT
     # ingesting yet, so we can validate the whole batch up front.
     resolved: list[tuple[Path, str, SceneMetadata]] = []
-    for f in input_files:
+    outcomes: list[SceneOutcome] = []
+    completed = 0
+    total_inputs = len(input_files)
+    stage("resolving", f"Resolving 0/{total_inputs} input files", 10)
+    for input_index, f in enumerate(input_files, start=1):
+        stage("resolving", f"Reading metadata for file {input_index}/{total_inputs}: {f.name}", 10)
         try:
             tif_path, metadata = _resolve_scene(f, staging_dir, sensor)
             resolved.append((f, tif_path, metadata))
         except (ValueError, Exception) as e:
             log.warning("Could not resolve %s: %s -- it will be skipped entirely.", f, e)
+            outcome = SceneOutcome(
+                source_file=str(f), resolved_tif_path="", acquisition_date="",
+                status="failed", error=str(e),
+            )
+            outcomes.append(outcome)
+            completed += 1
+            if on_scene_done is not None:
+                on_scene_done(outcome, completed, total_inputs)
 
+    stage("validating", "Batch validation of scanned scenes", 20)
     scanned = [
         ScannedScene(path=tif_path, acquisition_date=meta.acquisition_date, info=inspect_scene(tif_path))
         for _, tif_path, meta in resolved
@@ -433,14 +454,24 @@ def onboard_aoi(aoi_name: str, source_folder: str, sensor: str = "SENTINEL2_L2A"
 
     # Pass 2: ingest every scene through the exact same tested pipeline
     # a single manually-ingested scene goes through.
-    outcomes = []
-    for completed, (source_file, tif_path, metadata) in enumerate(resolved, start=1):
+    stage("ingesting", f"Preparing {len(resolved)} resolved scene(s)", 20)
+    for source_file, tif_path, metadata in resolved:
+        scene_completed = completed + 1
+        current_substage = "validating"
+
+        def on_substage(name: str):
+            nonlocal current_substage
+            current_substage = name
+            progress = 20 + int((completed / max(total_inputs, 1)) * 70)
+            stage("ingesting", f"Scene {scene_completed}/{total_inputs}: {source_file.name} — {name}", progress)
+
         try:
             result = ingest_scene(
                 tif_path, metadata.acquisition_date, sensor, aoi_id=aoi_id,
                 acquisition_date_source=metadata.acquisition_date_source,
                 cloud_cover_percent=metadata.cloud_cover_percent,
                 source_metadata=metadata.raw_metadata,
+                on_substage=on_substage,
             )
             outcomes.append(SceneOutcome(
                 source_file=str(source_file), resolved_tif_path=tif_path,
@@ -454,10 +485,13 @@ def onboard_aoi(aoi_name: str, source_folder: str, sensor: str = "SENTINEL2_L2A"
                 acquisition_date=metadata.acquisition_date,
                 status="failed", error=str(e),
             ))
+        completed = scene_completed
         if on_scene_done is not None:
-            on_scene_done(outcomes[-1], completed, len(resolved))
+            on_scene_done(outcomes[-1], completed, total_inputs)
 
+    stage("finalizing", "Updating AOI extent", 95)
     db.update_aoi_extent(aoi_id)
+    stage("done", "Onboarding complete", 100)
 
     return OnboardReport(aoi_id=aoi_id, aoi_name=aoi_name, validation=report, scene_outcomes=outcomes)
 

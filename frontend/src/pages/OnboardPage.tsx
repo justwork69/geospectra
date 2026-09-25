@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useStartOnboard, useOnboardJob } from '@/hooks/useOnboard';
 import { GlassPanel } from '@/components/common/GlassPanel';
@@ -10,6 +10,10 @@ import {
   ArrowRight,
   Activity,
   FileCheck,
+  Check,
+  Circle,
+  Clock3,
+  LoaderCircle,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -22,22 +26,42 @@ export const OnboardPage: React.FC = () => {
 
   const startOnboard = useStartOnboard();
   const { data: job } = useOnboardJob(activeJobId);
+  const [, setClock] = useState(Date.now());
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!aoiName.trim() || !sourceFolder.trim()) return;
+  useEffect(() => {
+    if (!job || (job.status !== 'queued' && job.status !== 'running')) return;
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [job?.status, job?.started_at]);
 
+  const stages = [
+    ['preparing', 'Preparing'],
+    ['discovering', 'Discovering'],
+    ['resolving', 'Resolving'],
+    ['validating', 'Validating'],
+    ['ingesting', 'Ingesting'],
+    ['finalizing', 'Finalizing'],
+  ] as const;
+  const currentStageIndex = job ? stages.findIndex(([stage]) => stage === job.stage) : -1;
+  const completedScenes = (job?.scenes_ingested ?? 0) + (job?.scenes_failed ?? 0) + (job?.scenes_skipped ?? 0);
+  const remainingScenes = Math.max((job?.scenes_found ?? 0) - completedScenes, 0);
+  const elapsedSeconds = job?.started_at ? Math.max(0, Math.floor((Date.now() - Date.parse(job.started_at)) / 1000)) : 0;
+  const elapsedLabel = `${String(Math.floor(elapsedSeconds / 60)).padStart(2, '0')}:${String(elapsedSeconds % 60).padStart(2, '0')}`;
+  const etaSeconds = completedScenes >= 2 ? Math.round(elapsedSeconds * (remainingScenes / completedScenes)) : null;
+  const etaLabel = etaSeconds === null ? null : `${String(Math.floor(etaSeconds / 60)).padStart(2, '0')}:${String(etaSeconds % 60).padStart(2, '0')}`;
+
+  const startPipeline = (name: string, folder: string) => {
     startOnboard.mutate(
       {
-        name: aoiName.trim().toLowerCase(),
-        source_folder: sourceFolder.trim(),
+        name: name.trim().toLowerCase(),
+        source_folder: folder.trim(),
         priority_tier: priorityTier,
         priority_geojson: priorityGeojson || undefined,
       },
       {
         onSuccess: (data) => {
           setActiveJobId(data.job_id);
-          toast.success(`Onboarding initiated for ${aoiName}!`, {
+          toast.success(`Onboarding initiated for ${name}!`, {
             description: `Job ID: ${data.job_id}`,
           });
         },
@@ -48,6 +72,17 @@ export const OnboardPage: React.FC = () => {
         },
       }
     );
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!aoiName.trim() || !sourceFolder.trim()) return;
+    startPipeline(aoiName, sourceFolder);
+  };
+
+  const handleDemoLoad = () => {
+    setAoiName('demo-aoi-live');
+    setSourceFolder('demo/demo-aoi-live');
   };
 
   return (
@@ -70,6 +105,25 @@ export const OnboardPage: React.FC = () => {
           Batch validate and ingest Copernicus Sentinel-2 zip archives or pre-processed GeoTIFF scenes
         </p>
       </div>
+
+      <GlassPanel className="p-6 md:p-8 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-aurora-300">Live Onboarding Demo</p>
+            <h2 className="mt-1 text-lg font-bold text-text-primary">Watch the real AOI onboarding pipeline</h2>
+          </div>
+          <button
+            type="button"
+            onClick={handleDemoLoad}
+            className="px-4 py-2 rounded-xl text-xs font-mono font-bold uppercase tracking-wider border border-aurora-500/30 bg-aurora-500/10 text-aurora-300 hover:bg-aurora-500/20 transition-colors"
+          >
+            Load Demo Folder
+          </button>
+        </div>
+        <p className="text-xs text-text-secondary font-mono leading-relaxed">
+          This uses the same real onboarding pipeline as normal AOI ingestion and prepares the live demo input for the onboard workflow.
+        </p>
+      </GlassPanel>
 
       {/* Onboarding Form */}
       <GlassPanel className="p-6 md:p-8 space-y-6">
@@ -187,6 +241,27 @@ export const OnboardPage: React.FC = () => {
               </div>
             </div>
 
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2" aria-label="Onboarding stages">
+              {stages.map(([stage, label], index) => {
+                const complete = job.stage === 'done' || (currentStageIndex >= 0 && index < currentStageIndex);
+                const current = job.status === 'running' && job.stage === stage;
+                return (
+                  <div key={stage} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] font-mono ${
+                    complete ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : current ? 'border-aurora-400/40 bg-aurora-500/10 text-aurora-300' : 'border-white/[0.06] text-text-muted'
+                  }`}>
+                    {complete ? <Check size={13} /> : current ? <LoaderCircle size={13} className="animate-spin" /> : <Circle size={11} />}
+                    <span>{label}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs font-mono text-text-muted">
+              <span className="flex items-center gap-1.5"><Clock3 size={13} />Elapsed {elapsedLabel}</span>
+              {etaLabel && job.status === 'running' && <span>Est. remaining ~{etaLabel}</span>}
+              {job.stage_detail && job.status !== 'done' && <span className="text-text-secondary">{job.stage_detail}</span>}
+            </div>
+
             {/* Telemetry Summary Counters */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.06]">
@@ -211,6 +286,14 @@ export const OnboardPage: React.FC = () => {
                 </span>
                 <span className="text-lg font-mono font-bold text-rose-400 mt-1 block">
                   {job.scenes_failed ?? 0}
+                </span>
+              </div>
+              <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.06]">
+                <span className="text-[10px] font-mono uppercase text-text-muted block">
+                  Scenes Skipped
+                </span>
+                <span className="text-lg font-mono font-bold text-amber-300 mt-1 block">
+                  {job.scenes_skipped ?? 0}
                 </span>
               </div>
               <div className="p-3.5 rounded-xl bg-white/[0.02] border border-white/[0.06]">
@@ -268,6 +351,8 @@ export const OnboardPage: React.FC = () => {
                               className={`px-2 py-0.5 rounded text-[10px] uppercase ${
                                 scene.status === 'ok' || scene.status === 'ingested'
                                   ? 'text-emerald-400 bg-emerald-500/10'
+                                  : scene.status === 'skipped_duplicate'
+                                  ? 'text-amber-300 bg-amber-500/10'
                                   : 'text-rose-400 bg-rose-500/10'
                               }`}
                             >

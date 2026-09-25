@@ -23,7 +23,7 @@ export function useOnboardJob(jobId: string | undefined | null) {
     refetchInterval: (query) => {
       const status = query.state.data?.status;
       if (status === 'queued' || status === 'running') {
-        return 2000;
+        return 1000;
       }
       return false;
     },

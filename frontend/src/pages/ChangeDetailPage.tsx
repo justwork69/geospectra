@@ -39,7 +39,7 @@ export const ChangeDetailPage: React.FC = () => {
   const [activeModal, setActiveModal] = useState<'CONFIRM' | 'REJECT' | null>(null);
   const [zoomImage, setZoomImage] = useState<string | null>(null);
   const [isCompareFullscreen, setIsCompareFullscreen] = useState(false);
-  const [showHeatmap, setShowHeatmap] = useState(false);
+  const [showHeatmap, setShowHeatmap] = useState(true);
 
   useEffect(() => {
     if (!isCompareFullscreen) return;
@@ -149,6 +149,9 @@ export const ChangeDetailPage: React.FC = () => {
               <Layers size={14} className="text-aurora-400" />
               Multi-Temporal Sensor Triptych Inspection
             </h2>
+            <p className="text-xs font-mono text-text-secondary">
+              We don't just show a change score — we show the analyst the evidence. Heatmap → Mask → SAR → Velocity
+            </p>
 
             <GlassPanel className="relative w-full max-w-2xl mx-auto p-5">
               <BeforeAfterCompare

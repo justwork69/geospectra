@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useChangeCandidates, useSubmitDecision } from '@/hooks/useChanges';
 import { useAuditLog } from '@/hooks/useAuditLog';
 import { GlassPanel } from '@/components/common/GlassPanel';
@@ -46,6 +47,7 @@ export const ReviewQueuePage: React.FC = () => {
 
   const { data: auditLogs, isLoading: auditLoading } = useAuditLog(activeTab === 'audit');
   const submitDecision = useSubmitDecision();
+  const queryClient = useQueryClient();
 
   const [selectedCandidate, setSelectedCandidate] = useState<ChangeCandidate | null>(null);
   const [decisionReason, setDecisionReason] = useState('');
@@ -78,6 +80,7 @@ export const ReviewQueuePage: React.FC = () => {
           toast.success(`Candidate #${selectedCandidate.candidate_id} ${decision.toLowerCase()}ed!`);
           setDecisionReason('');
           refetchCandidates();
+          queryClient.invalidateQueries({ queryKey: ['audit-log'] });
         },
         onError: (err) => {
           toast.error('Failed to submit review decision', {

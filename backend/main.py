@@ -1,4 +1,5 @@
 import io
+import hashlib
 import os
 import threading
 import uuid
@@ -332,6 +333,7 @@ class AuditLogEntry(BaseModel):
 	decision: str
 	reason: str | None
 	created_at: str
+	fingerprint: str | None = None
 
 
 class Cluster(BaseModel):
@@ -364,10 +366,14 @@ class OnboardJob(BaseModel):
 	status: Literal["queued", "running", "done", "failed"]
 	progress: int
 	message: str | None
+	stage: Literal["preparing", "discovering", "resolving", "validating", "ingesting", "finalizing", "done"] | None = None
+	stage_detail: str | None = None
+	started_at: str | None = None
 	aoi_id: str | None
 	scenes_found: int | None
 	scenes_ingested: int | None
 	scenes_failed: int | None
+	scenes_skipped: int | None = None
 	tiles_added: int | None
 	warnings: list[str]
 	scenes: list[OnboardScene]
@@ -1185,14 +1191,18 @@ def system_llm_status():
 @app.post("/tiles/{tile_id}/analysis/brief")
 def tile_analysis_brief(tile_id: str, request: Request, payload: dict):
 	from backend.app.change.llm_brief import generate_llm_brief
+	facts = _tile_analysis_facts(tile_id, request, payload.get("before_date"), payload.get("after_date"))
+	llm_text = generate_llm_brief(facts)
+	return {"available": llm_text is not None, "brief": llm_text or _deterministic_brief(facts), "facts": facts}
+
+
+def _tile_analysis_facts(tile_id: str, request: Request, before_date, after_date) -> dict:
 	def rounded(value, digits=4):
 		return round(float(value), digits) if isinstance(value, (int, float)) else value
 
-	before_date = payload.get("before_date")
-	after_date = payload.get("after_date")
 	analysis = tile_analysis(tile_id, request, from_date=before_date, to_date=after_date)
 	metrics = analysis["metrics"]
-	facts = {
+	return {
 		"tile_id": tile_id, "aoi_id": analysis.get("aoi_id"),
 		"from_date": analysis["range"]["from"], "to_date": analysis["range"]["to"],
 		"separation_days": analysis["range"]["days"], "change_score": rounded(metrics.get("overall_change_score")),
@@ -1203,18 +1213,118 @@ def tile_analysis_brief(tile_id: str, request: Request, payload: dict):
 		"sar_vh_delta": rounded(metrics.get("sar_vh_delta")), "sar_available": analysis["quality"].get("sar_available"),
 		"observations_used": analysis["quality"].get("observations_used"), "modality": "optical and SAR temporal evidence" if analysis["quality"].get("sar_available") else "optical temporal evidence",
 	}
-	llm_text = generate_llm_brief(facts)
-	brief_text = llm_text
-	if not brief_text:
-		parts = [f"Observed change was measured between {facts['from_date']} and {facts['to_date']}."]
-		for label, key in (("NDVI", "ndvi_delta"), ("NDWI", "ndwi_delta"), ("SAR change", "sar_change")):
-			value = facts.get(key)
-			if value is not None:
-				parts.append(f"{label} changed by {float(value):.3f}.")
-		if not facts["sar_available"]:
-			parts.append("Sentinel-1 evidence was unavailable for the selected interval.")
-		brief_text = " ".join(parts)
-	return {"available": llm_text is not None, "brief": brief_text, "facts": facts}
+
+
+def _deterministic_brief(facts: dict) -> str:
+	parts = [f"Observed change was measured between {facts['from_date']} and {facts['to_date']}."]
+	for label, key in (("NDVI", "ndvi_delta"), ("NDWI", "ndwi_delta"), ("SAR change", "sar_change")):
+		value = facts.get(key)
+		if value is not None:
+			parts.append(f"{label} changed by {float(value):.3f}.")
+	if not facts["sar_available"]:
+		parts.append("Sentinel-1 evidence was unavailable for the selected interval.")
+	return " ".join(parts)
+
+
+def _offline_chat_fallback(facts: dict) -> str:
+	return "QWEN Analyst Assistant is unavailable. " + _deterministic_brief(facts)
+
+
+@app.post("/tiles/{tile_id}/analysis/chat")
+def tile_analysis_chat(tile_id: str, request: Request, payload: dict):
+	from backend.app.change.analyst_chat import generate_chat_reply
+
+	question = payload.get("question")
+	if not isinstance(question, str) or not question.strip() or len(question) > 500:
+		raise HTTPException(400, "A non-empty question (max 500 chars) is required")
+	question = question.strip()
+
+	history_payload = payload.get("history")
+	history = []
+	if isinstance(history_payload, list):
+		for item in history_payload:
+			if not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}:
+				continue
+			content = item.get("content")
+			if isinstance(content, str) and content.strip():
+				history.append({"role": item["role"], "content": content.strip()[:600]})
+	facts = _tile_analysis_facts(tile_id, request, payload.get("before_date"), payload.get("after_date"))
+	reply = generate_chat_reply(question, history[-6:], facts)
+	return {"available": reply is not None, "reply": reply or _offline_chat_fallback(facts), "facts": facts}
+
+
+@app.post("/tiles/{tile_id}/analysis/report")
+def tile_analysis_report(tile_id: str, request: Request, payload: dict):
+	from backend.app.change.evidence_report import build_report_payload, render_report_pdf
+	from backend.app.change.llm_brief import generate_llm_brief
+
+	report_format = payload.get("format", "pdf")
+	if report_format not in {"pdf", "json"}:
+		raise HTTPException(400, "format must be pdf or json")
+
+	history = db.get_tile_history(tile_id)
+	if not history:
+		raise HTTPException(404, "Tile not found")
+	before_input = payload.get("before_date")
+	after_input = payload.get("after_date")
+	if before_input is not None and _normalize_date(before_input) is None:
+		raise HTTPException(422, "before_date must be an actual observation for this tile")
+	if after_input is not None and _normalize_date(after_input) is None:
+		raise HTTPException(422, "after_date must be an actual observation for this tile")
+	resolved_from = _normalize_date(before_input) or history[0]["acquisition_date"]
+	resolved_to = _normalize_date(after_input) or history[-1]["acquisition_date"]
+	by_date = {row["acquisition_date"]: row for row in history}
+	if resolved_from not in by_date or resolved_to not in by_date:
+		raise HTTPException(422, "before_date and after_date must be actual observations for this tile")
+	if resolved_from >= resolved_to:
+		raise HTTPException(422, "before_date must be earlier than after_date")
+
+	facts = _tile_analysis_facts(tile_id, request, resolved_from, resolved_to)
+	before_row = by_date[resolved_from]
+	after_row = by_date[resolved_to]
+	brief_text = generate_llm_brief(facts) or _deterministic_brief(facts)
+	heatmap_path = None
+	if source_available(before_row["tile_path"]) and source_available(after_row["tile_path"]):
+		heatmap_path = heatmap.spectral_diff_heatmap(before_row["tile_path"], after_row["tile_path"])
+	heatmap_url = public_url(request, DATA_DIR.parent / heatmap_path) if heatmap_path else None
+	before_tile_path = _obj_value(before_row, "tile_path")
+	after_tile_path = _obj_value(after_row, "tile_path")
+	before_local_path = None
+	after_local_path = None
+	if before_tile_path and source_available(before_tile_path):
+		before_local_path = tile_thumbnail(before_tile_path, GENERATED_DIR / "thumbnails", _obj_value(before_row, "vector_id"))
+	if after_tile_path and source_available(after_tile_path):
+		after_local_path = tile_thumbnail(after_tile_path, GENERATED_DIR / "thumbnails", _obj_value(after_row, "vector_id"))
+	heatmap_local_path = DATA_DIR.parent / heatmap_path if heatmap_path else None
+	analysis_rows = {
+		"before": {
+			"ndvi_mean": before_row["ndvi_mean"],
+			"ndwi_mean": before_row["ndwi_mean"],
+			"image_path": before_local_path,
+			"image_url": _observation_thumbnail_url(request, before_row),
+		},
+		"after": {
+			"ndvi_mean": after_row["ndvi_mean"],
+			"ndwi_mean": after_row["ndwi_mean"],
+			"image_path": after_local_path,
+			"image_url": _observation_thumbnail_url(request, after_row),
+		},
+		"difference_heatmap_path": heatmap_local_path,
+		"difference_heatmap_url": heatmap_url,
+	}
+	report = build_report_payload(tile_id, facts, analysis_rows, brief_text)
+	filename = f"geospectra-report-{tile_id}.{report_format}"
+	if report_format == "json":
+		return Response(
+			content=json.dumps(report, sort_keys=True, default=str),
+			media_type="application/json",
+			headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+		)
+	before_pdf_path = report.get("image_urls", {}).get("before") or before_local_path
+	after_pdf_path = report.get("image_urls", {}).get("after") or after_local_path
+	diff_pdf_path = report.get("image_urls", {}).get("difference_heatmap") or heatmap_local_path
+	pdf_bytes = render_report_pdf(report, before_pdf_path, after_pdf_path, diff_pdf_path)
+	return Response(content=pdf_bytes, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @app.post("/preview/image")
@@ -1560,7 +1670,20 @@ def decision(candidate_id: str, payload: ReviewDecision):
 def audit_log():
 	with db.get_conn() as conn:
 		rows = conn.execute("SELECT al.*, cc.tile_id FROM audit_log al LEFT JOIN change_candidates cc ON cc.candidate_id=al.candidate_id ORDER BY al.decided_at DESC").fetchall()
-	return [{"log_id": str(row["log_id"]), "candidate_id": str(row["candidate_id"]), "tile_id": row["tile_id"], "decision": row["analyst_decision"], "reason": row["reason"], "created_at": row["decided_at"]} for row in rows]
+	return [
+		{
+			"log_id": str(row["log_id"]),
+			"candidate_id": str(row["candidate_id"]),
+			"tile_id": row["tile_id"],
+			"decision": row["analyst_decision"],
+			"reason": row["reason"],
+			"created_at": row["decided_at"],
+			"fingerprint": hashlib.sha256(
+				f"{row['log_id']}|{row['candidate_id']}|{row['analyst_decision']}|{row['reason']}|{row['decided_at']}|{row['model_version']}".encode("utf-8")
+			).hexdigest(),
+		}
+		for row in rows
+	]
 
 
 @app.get("/clusters", response_model=list[Cluster])
@@ -1599,14 +1722,43 @@ def update_job(job_id: str, **values):
 
 
 def run_onboarding(job_id: str, name: str, source_folder: str, discovered_count: int):
-	update_job(job_id, status="running")
+	update_job(job_id, status="running", started_at=datetime.now(timezone.utc).isoformat())
+
+	def on_stage(stage: str, detail: str, progress: int):
+		update_job(
+			job_id, stage=stage, stage_detail=None if stage == "done" else detail,
+			message=None if stage == "done" else detail, progress=progress,
+		)
+
+	def on_scene_done(outcome, completed: int, total: int):
+		scene_name = scene_id(name, outcome.acquisition_date) if outcome.acquisition_date else Path(outcome.source_file).stem
+		result = {
+			"scene_id": scene_name,
+			"date": outcome.acquisition_date or None,
+			"status": outcome.status,
+			"message": outcome.error,
+		}
+		with JOB_LOCK:
+			job = JOBS[job_id]
+			job["scenes"] = [*job.get("scenes", []), result]
+			job["scenes_ingested"] = (job.get("scenes_ingested") or 0) + (1 if outcome.status == "ingested" else 0)
+			job["scenes_failed"] = (job.get("scenes_failed") or 0) + (1 if outcome.status == "failed" else 0)
+			job["scenes_skipped"] = (job.get("scenes_skipped") or 0) + (1 if outcome.status == "skipped_duplicate" else 0)
+			job["tiles_added"] = (job.get("tiles_added") or 0) + outcome.tiles_added
+			job["progress"] = max(job.get("progress", 0), 20 + int(completed / max(total, 1) * 70))
+
 	try:
-		report = onboarding.onboard_aoi(name, source_folder, on_scene_done=lambda _outcome, completed, total: update_job(job_id, progress=int(completed / max(total, 1) * 100)))
-		update_job(job_id, status="done", progress=100, message=None, aoi_id=name, scenes_found=discovered_count, scenes_ingested=report.n_ingested,
-				   scenes_failed=report.n_failed, tiles_added=report.total_tiles_added, warnings=report.validation.warnings,
-				   scenes=[{"scene_id": scene_id(name, item.acquisition_date), "date": item.acquisition_date, "status": item.status, "message": item.error} for item in report.scene_outcomes])
+		report = onboarding.onboard_aoi(name, source_folder, on_scene_done=on_scene_done, on_stage=on_stage)
+		update_job(
+			job_id, status="done", stage="done", stage_detail=None, progress=100, message=None,
+			aoi_id=name, scenes_found=discovered_count, scenes_ingested=report.n_ingested,
+			scenes_failed=report.n_failed, scenes_skipped=sum(1 for item in report.scene_outcomes if item.status == "skipped_duplicate"),
+			tiles_added=report.total_tiles_added,
+			warnings=report.validation.warnings + [item.error for item in report.scene_outcomes if item.error],
+			scenes=[{"scene_id": scene_id(name, item.acquisition_date) if item.acquisition_date else Path(item.source_file).stem, "date": item.acquisition_date or None, "status": item.status, "message": item.error} for item in report.scene_outcomes],
+		)
 	except Exception as error:
-		update_job(job_id, status="failed", message=str(error))
+		update_job(job_id, status="failed", stage_detail=str(error), message=str(error))
 
 
 @app.post("/aois/onboard", response_model=OnboardJob)
@@ -1619,7 +1771,14 @@ def start_onboard(payload: OnboardRequest, background_tasks: BackgroundTasks):
 	if discovered_count == 0:
 		raise HTTPException(400, "Source folder contains no complete prepared scenes")
 	with JOB_LOCK:
-		JOBS[job_id] = {"job_id": job_id, "status": "queued", "progress": 0, "message": f"Queued {discovered_count} scene(s)", "aoi_id": payload.name, "scenes_found": discovered_count, "scenes_ingested": None, "scenes_failed": None, "tiles_added": None, "warnings": [], "scenes": []}
+		JOBS[job_id] = {
+			"job_id": job_id, "status": "queued", "progress": 0,
+			"message": f"Queued {discovered_count} scene(s)", "stage": "preparing",
+			"stage_detail": "Queued for onboarding", "started_at": None,
+			"aoi_id": payload.name, "scenes_found": discovered_count,
+			"scenes_ingested": 0, "scenes_failed": 0, "scenes_skipped": 0,
+			"tiles_added": 0, "warnings": [], "scenes": [],
+		}
 	background_tasks.add_task(run_onboarding, job_id, payload.name, payload.source_folder, discovered_count)
 	return JOBS[job_id]
 

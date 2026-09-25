@@ -2,6 +2,46 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import type { TileDetail, SearchResult, TileObservation, TileObservationsResponse, TemporalAnalysis, TemporalSignature, AnalysisBrief } from '@/types/api';
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface AnalystChatResponse {
+  available: boolean;
+  reply: string;
+  facts: Record<string, unknown>;
+}
+
+export async function postAnalystChat(tileId: string, fromDate: string, toDate: string, question: string, history: ChatMessage[]): Promise<AnalystChatResponse> {
+  return api.post<AnalystChatResponse>(`/tiles/${tileId}/analysis/chat`, {
+    question,
+    before_date: fromDate,
+    after_date: toDate,
+    history,
+  });
+}
+
+export async function downloadAnalystReport(tileId: string, fromDate: string, toDate: string, format: 'pdf' | 'json', summary?: string): Promise<void> {
+  const response = await fetch(`${api.baseUrl.replace(/\/$/, '')}/tiles/${encodeURIComponent(tileId)}/analysis/report`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ before_date: fromDate, after_date: toDate, format, summary }),
+  });
+  if (!response.ok) {
+    throw new Error(`Report export failed with HTTP ${response.status}`);
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = objectUrl;
+  link.download = `geospectra-report-${tileId}.${format}`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
 export function useTile(tileId: string | undefined) {
   return useQuery<TileDetail>({
     queryKey: ['tile', tileId],

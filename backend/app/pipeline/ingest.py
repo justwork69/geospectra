@@ -14,6 +14,7 @@ is what satisfies the "incremental ingestion, no full rebuild"
 requirement end to end, not just at the FAISS layer.
 """
 import logging
+from typing import Callable
 
 from backend.app.geospatial import catalog_db as db
 from backend.app.geospatial.reader import inspect_scene
@@ -29,13 +30,16 @@ log = logging.getLogger("ingest")
 
 def ingest_scene(scene_path: str, acquisition_date: str, sensor: str, aoi_id: int = None,
                   acquisition_date_source: str = None, cloud_cover_percent: float = None,
-                  source_metadata: dict = None) -> dict:
+                  source_metadata: dict = None,
+                  on_substage: Callable[[str], None] | None = None) -> dict:
     """aoi_id and the metadata_* kwargs are optional so this still works
     exactly as before for ad-hoc single-scene ingestion (e.g. from the
     CLI without an AOI concept); app/pipeline/onboard_aoi.py always
     passes all of them when onboarding a real, metadata-rich batch."""
     # Validate the model before registering anything so a failed embedding
     # setup cannot leave scenes and tiles without matching FAISS vectors.
+    if on_substage is not None:
+        on_substage("validating")
     validate_remoteclip_config()
     db.init_db()
 
@@ -52,6 +56,8 @@ def ingest_scene(scene_path: str, acquisition_date: str, sensor: str, aoi_id: in
         raise ValueError(f"Scene has no valid nonzero B02/B03/B04/B08 pixels: {scene_path}")
 
     # Register the parent scene first -- tiles carry a foreign key to it.
+    if on_substage is not None:
+        on_substage("registering")
     db.register_scene(
         scene_path, acquisition_date, sensor, aoi_id=aoi_id,
         acquisition_date_source=acquisition_date_source,
@@ -59,6 +65,8 @@ def ingest_scene(scene_path: str, acquisition_date: str, sensor: str, aoi_id: in
     )
 
     # Stage 3/4: tile into the fixed MGRS grid.
+    if on_substage is not None:
+        on_substage("tiling")
     tiles = tile_scene(scene_path, acquisition_date, sensor)
     log.info("Tiled %s into %d tiles", scene_path, len(tiles))
 
@@ -66,14 +74,20 @@ def ingest_scene(scene_path: str, acquisition_date: str, sensor: str, aoi_id: in
     # capturing the vector_id we'll reuse as the FAISS id.
     vector_ids, tile_paths = [], []
     for tile in tiles:
+        if on_substage is not None:
+            on_substage("features")
         features = compute_tile_features(tile.tile_path)
         vector_id = db.insert_tile(tile, features, aoi_id=aoi_id)
         vector_ids.append(vector_id)
         tile_paths.append(tile.tile_path)
 
     # Stage 7 + 8 + 18: embed in one batch, then append (not rebuild) the index.
+    if on_substage is not None:
+        on_substage("embedding")
     vectors = embed_image_tiles_batch(tile_paths)
     index = VectorIndex()
+    if on_substage is not None:
+        on_substage("indexing")
     index.add_vectors(vectors, vector_ids)
     index.save()
 
