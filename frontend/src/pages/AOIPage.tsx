@@ -7,6 +7,7 @@ import { SkeletonCard } from '@/components/common/SkeletonCard';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ErrorCard } from '@/components/common/ErrorCard';
 import { formatDate, formatCoord } from '@/lib/utils';
+import { AOIExplorer } from '@/components/aoi-explorer/AOIExplorer';
 import { Map, Layers, Grid, Calendar, Clock, Plus, ArrowUpRight } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -42,6 +43,8 @@ export const AOIPage: React.FC = () => {
         />
       )}
 
+      {!isLoading && aois && aois.length > 0 && <AOIExplorer aois={aois} />}
+
       {isLoading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {Array.from({ length: 3 }).map((_, i) => (
@@ -59,78 +62,77 @@ export const AOIPage: React.FC = () => {
           }}
         />
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {aois.map((aoi, index) => (
-            <motion.div
-              key={aoi.aoi_id}
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: index * 0.08, duration: 0.4 }}
-            >
-              <GlassPanel
-                hoverEffect
-                onClick={() => navigate(`/aois/${aoi.aoi_id}`)}
-                className="cursor-pointer group flex flex-col h-full overflow-hidden"
+        <div className="space-y-4 pt-2">
+          <div className="text-[10px] font-mono uppercase tracking-[0.28em] text-text-muted">All Areas of Interest</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {aois.map((aoi, index) => (
+              <motion.div
+                key={aoi.aoi_id}
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.08, duration: 0.4 }}
               >
-                {/* Mosaic Preview */}
-                <div className="relative h-48 w-full overflow-hidden">
-                  <TileThumbnail
-                    src={aoi.mosaic_thumbnail_url}
-                    alt={aoi.name}
-                    aspectRatio="wide"
-                    className="w-full h-full rounded-none border-none"
-                  />
-                  <div className="absolute top-3 right-3 px-2 py-1 rounded-md bg-space-950/80 backdrop-blur-md border border-white/[0.1] text-[10px] font-mono text-aurora-300 flex items-center gap-1.5 opacity-90 group-hover:opacity-100 group-hover:border-aurora-500/40 transition-all">
-                    <span>Inspect</span>
-                    <ArrowUpRight size={12} />
-                  </div>
-                </div>
-
-                {/* Body Details */}
-                <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
-                  <div>
-                    <h3 className="text-lg font-bold text-text-primary capitalize tracking-tight group-hover:text-aurora-300 transition-colors">
-                      {aoi.name}
-                    </h3>
-                    <p className="text-[11px] font-mono text-text-muted mt-1 truncate">
-                      BBOX: [{formatCoord(aoi.bbox[0])}, {formatCoord(aoi.bbox[1])}] to [
-                      {formatCoord(aoi.bbox[2])}, {formatCoord(aoi.bbox[3])}]
-                    </p>
-                  </div>
-
-                  {/* Badges & Metrics */}
-                  <div className="grid grid-cols-2 gap-2 py-2 border-y border-white/[0.06]">
-                    <div className="flex items-center gap-2 text-xs font-mono text-text-secondary">
-                      <Layers size={14} className="text-violet-light" />
-                      <span>{aoi.scene_count} scenes</span>
-                    </div>
-                    <div className="flex items-center gap-2 text-xs font-mono text-text-secondary">
-                      <Grid size={14} className="text-emerald-400" />
-                      <span>{aoi.tile_count} chips</span>
+                <GlassPanel
+                  hoverEffect
+                  onClick={() => navigate(`/aois/${aoi.aoi_id}`)}
+                  className="cursor-pointer group flex flex-col h-full overflow-hidden"
+                >
+                  <div className="relative h-48 w-full overflow-hidden">
+                    <TileThumbnail
+                      src={aoi.mosaic_thumbnail_url}
+                      alt={aoi.name}
+                      aspectRatio="wide"
+                      className="w-full h-full rounded-none border-none"
+                    />
+                    <div className="absolute top-3 right-3 px-2 py-1 rounded-md bg-space-950/80 backdrop-blur-md border border-white/[0.1] text-[10px] font-mono text-aurora-300 flex items-center gap-1.5 opacity-90 group-hover:opacity-100 group-hover:border-aurora-500/40 transition-all">
+                      <span>Inspect</span>
+                      <ArrowUpRight size={12} />
                     </div>
                   </div>
 
-                  {/* Temporal Extent & Activity */}
-                  <div className="space-y-1 text-[11px] font-mono text-text-muted">
-                    <div className="flex items-center gap-1.5">
-                      <Calendar size={12} className="text-text-secondary shrink-0" />
-                      <span className="truncate">
-                        {formatDate(aoi.start_date)} → {formatDate(aoi.end_date)}
-                      </span>
+                  <div className="p-5 flex-1 flex flex-col justify-between space-y-4">
+                    <div>
+                      <h3 className="text-lg font-bold text-text-primary capitalize tracking-tight group-hover:text-aurora-300 transition-colors">
+                        {aoi.name}
+                      </h3>
+                      <p className="text-[11px] font-mono text-text-muted mt-1 truncate">
+                        BBOX: [{formatCoord(aoi.bbox[0])}, {formatCoord(aoi.bbox[1])}] to [
+                        {formatCoord(aoi.bbox[2])}, {formatCoord(aoi.bbox[3])}]
+                      </p>
                     </div>
-                    {aoi.last_activity && (
+
+                    <div className="grid grid-cols-2 gap-2 py-2 border-y border-white/[0.06]">
+                      <div className="flex items-center gap-2 text-xs font-mono text-text-secondary">
+                        <Layers size={14} className="text-violet-light" />
+                        <span>{aoi.scene_count} scenes</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-xs font-mono text-text-secondary">
+                        <Grid size={14} className="text-emerald-400" />
+                        <span>{aoi.tile_count} chips</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1 text-[11px] font-mono text-text-muted">
                       <div className="flex items-center gap-1.5">
-                        <Clock size={12} className="text-text-secondary shrink-0" />
+                        <Calendar size={12} className="text-text-secondary shrink-0" />
                         <span className="truncate">
-                          Updated {formatDate(aoi.last_activity)}
+                          {formatDate(aoi.start_date)} → {formatDate(aoi.end_date)}
                         </span>
                       </div>
-                    )}
+                      {aoi.last_activity && (
+                        <div className="flex items-center gap-1.5">
+                          <Clock size={12} className="text-text-secondary shrink-0" />
+                          <span className="truncate">
+                            Updated {formatDate(aoi.last_activity)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              </GlassPanel>
-            </motion.div>
-          ))}
+                </GlassPanel>
+              </motion.div>
+            ))}
+          </div>
         </div>
       )}
     </div>

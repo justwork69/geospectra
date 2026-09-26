@@ -10,6 +10,10 @@ This project combines:
 
 It is designed to work fully offline once the RemoteCLIP checkpoint is staged locally.
 
+## India explorer local outline asset
+
+The AOI Explorer includes a minimal local India silhouette for the offline initial map view. This asset is intentionally simplified and is used only as a non-authoritative visual backdrop for the UI. It is not a source-data replacement for the project’s backend AOI metadata or satellite coverage. The outline is a local synthetic asset created for this repository’s demo and offline map experience, not a redistributed external geospatial dataset.
+
 ## What the system does
 
 1. Reads raw GeoTIFF/COG scenes and validates them before processing.

@@ -724,7 +724,8 @@ def aoi_tiles(aoi_id: str, request: Request):
 	with db.get_conn() as conn:
 		rows = conn.execute(
 			"SELECT tile_id, MIN(acquisition_date) first_observation, MAX(acquisition_date) latest_observation, "
-			"COUNT(*) observation_count FROM tiles WHERE aoi_id=? GROUP BY tile_id ORDER BY tile_id",
+			"COUNT(*) observation_count, MIN(minlon) minlon, MIN(minlat) minlat, MAX(maxlon) maxlon, MAX(maxlat) maxlat "
+			"FROM tiles WHERE aoi_id=? GROUP BY tile_id ORDER BY tile_id",
 			(aoi["aoi_id"],),
 		).fetchall()
 	items = []
@@ -733,11 +734,15 @@ def aoi_tiles(aoi_id: str, request: Request):
 		latest = history[-1] if history else None
 		velocity = temporal_signature.compute_velocity(row["tile_id"])
 		thumbnail = _observation_thumbnail_url(request, latest) if latest else None
+		bbox = None
+		if row["minlon"] is not None and row["minlat"] is not None and row["maxlon"] is not None and row["maxlat"] is not None:
+			bbox = [row["minlon"], row["minlat"], row["maxlon"], row["maxlat"]]
 		items.append({
 			"tile_id": row["tile_id"], "aoi_id": aoi_id, "aoi_name": aoi["name"],
 			"first_observation": row["first_observation"], "latest_observation": row["latest_observation"],
 			"observation_count": row["observation_count"], "thumbnail_url": thumbnail,
 			"latest_velocity": velocity.latest_velocity, "acceleration": velocity.acceleration, "trend": velocity.trend,
+			"bbox": bbox,
 		})
 	return {"aoi_id": aoi_id, "aoi_name": aoi["name"], "tile_count": len(items), "tiles": items}
 

@@ -53,6 +53,7 @@ export interface AOITileSummary {
   latest_velocity: number | null;
   acceleration: number | null;
   trend: string | null;
+  bbox?: [number, number, number, number] | null;
 }
 
 export interface AOITilesResponse {
